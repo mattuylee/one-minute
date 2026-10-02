@@ -62,6 +62,7 @@ class MainActivity : ComponentActivity() {
         val serviceError by ServiceStatus.error.collectAsStateWithLifecycle()
         var picking by rememberSaveable { mutableStateOf(false) }
         var editingDuration by rememberSaveable { mutableStateOf(false) }
+        var editingReturnGrace by rememberSaveable { mutableStateOf(false) }
         var showingHelp by rememberSaveable { mutableStateOf(false) }
         var showingPreview by rememberSaveable { mutableStateOf(false) }
         val snack = remember { SnackbarHostState() }
@@ -69,8 +70,8 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(error) {
             error?.let { snack.showSnackbar(it); model.dismissError() }
         }
-        BackHandler(picking || showingPreview || editingDuration) {
-            picking = false; showingPreview = false; editingDuration = false
+        BackHandler(picking || showingPreview || editingDuration || editingReturnGrace) {
+            picking = false; showingPreview = false; editingDuration = false; editingReturnGrace = false
         }
         val config = settings
         if (showingPreview && config != null) {
@@ -80,6 +81,12 @@ class MainActivity : ComponentActivity() {
         if (editingDuration && config != null) {
             DurationScreen(config.seconds, onDismiss = { editingDuration = false }) {
                 model.setSeconds(it); editingDuration = false
+            }
+            return
+        }
+        if (editingReturnGrace && config != null) {
+            DurationScreen(config.returnGraceMinutes, returnGrace = true, onDismiss = { editingReturnGrace = false }) {
+                model.setReturnGraceMinutes(it); editingReturnGrace = false
             }
             return
         }
@@ -144,6 +151,14 @@ class MainActivity : ComponentActivity() {
                                         Text(" 秒等待", Modifier.weight(1f).padding(start = 8.dp), color = MaterialTheme.colorScheme.onPrimaryContainer)
                                         FilledTonalButton(onClick = { editingDuration = true }, shape = CircleShape) { Text("调整") }
                                     }
+                                    HorizontalDivider(Modifier.padding(vertical = 12.dp))
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text("返回免等待", fontWeight = FontWeight.Medium)
+                                            Text("离开 ${config.returnGraceMinutes} 分钟内返回", fontSize = 12.sp)
+                                        }
+                                        TextButton(onClick = { editingReturnGrace = true }) { Text("设置") }
+                                    }
                                 }
                             }
                         }
@@ -175,7 +190,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        items(selected, key = { it.packageName }) { app -> AppRow(app, true, "每次打开前等待 ${config.seconds} 秒") { model.select(app.packageName, it) } }
+                        items(selected, key = { it.packageName }) { app -> AppRow(app, true, "等待 ${config.seconds} 秒 · 离开 ${config.returnGraceMinutes} 分钟内返回免等待") { model.select(app.packageName, it) } }
                         item { TextButton(onClick = { showingPreview = true }, modifier = Modifier.fillMaxWidth()) { Text("体验一下等待页") } }
                     }
                 }
@@ -185,13 +200,13 @@ class MainActivity : ComponentActivity() {
             onDismissRequest = { showingHelp = false },
             title = { Text("开始之前，只需一步") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("在系统无障碍设置中找到「稍等」，开启服务。它会识别当前应用，并显示等待页。", lineHeight = 23.sp)
                     Text("不读取页面文字或输入内容，不截图、不联网。你可以随时关闭服务。", lineHeight = 23.sp)
                     Text("如果 Android 16 提示「受限设置」，先到系统的应用信息页，按系统提示允许受限设置，再回来开启。", fontSize = 13.sp, lineHeight = 21.sp)
                     TextButton(onClick = { startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName"))) }) { Text("打开应用信息") }
                     HorizontalDivider()
-                    Text("等待结束后点「继续」才能使用。返回桌面、切换应用或锁屏会结束本次会话，下次重新等待。键盘和应用内页面切换不重复计时。", fontSize = 13.sp, lineHeight = 21.sp)
+                    Text("等待结束后点「继续」才能使用。每个应用放行后，离开不超过设定的免等待时长，返回直接使用；超过则重新计时。锁屏算离开，通知中心不算。未点继续就离开，下次重计；服务重启清空放行记录。", fontSize = 13.sp, lineHeight = 21.sp)
                 }
             },
             confirmButton = { TextButton(onClick = { showingHelp = false; openAccessibility() }) { Text("前往无障碍设置") } },
@@ -236,29 +251,31 @@ private fun AppRow(app: InstalledApp, selected: Boolean, subtitle: String = app.
 }
 
 @Composable
-private fun DurationScreen(initial: Int, onDismiss: () -> Unit, onSave: (Int) -> Unit) {
+private fun DurationScreen(initial: Int, returnGrace: Boolean = false, onDismiss: () -> Unit, onSave: (Int) -> Unit) {
     var input by rememberSaveable { mutableStateOf(initial.toString()) }
     val value = input.toIntOrNull()
+    val range = if (returnGrace) 1..60 else 1..600
+    val unit = if (returnGrace) "分钟" else "秒"
     Scaffold(containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
-            Button(enabled = value != null && value in 1..600, onClick = { value?.let(onSave) },
+            Button(enabled = value != null && value in range, onClick = { value?.let(onSave) },
                 modifier = Modifier.navigationBarsPadding().imePadding().padding(24.dp).fillMaxWidth().height(54.dp)) { Text("保存") }
         }
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).padding(24.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(20.dp)) {
             TextButton(onClick = onDismiss) { Text("取消") }
-            Text("打开前，稍等多久？", fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
-            Text("所有选定应用使用相同的等待时长。", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(if (returnGrace) "返回免等待时长" else "打开前，稍等多久？", fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+            Text(if (returnGrace) "应用放行后，离开不超过这段时间，返回免等待。所有选定应用共用此设置。" else "所有选定应用使用相同的等待时长。", color = MaterialTheme.colorScheme.onSurfaceVariant)
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                listOf(10, 30, 60, 120).forEach { seconds ->
-                    FilterChip(selected = value == seconds, onClick = { input = seconds.toString() }, label = { Text("${seconds}秒") })
+                (if (returnGrace) listOf(1, 5, 15, 30) else listOf(10, 30, 60, 120)).forEach { duration ->
+                    FilterChip(selected = value == duration, onClick = { input = duration.toString() }, label = { Text("$duration$unit") })
                 }
             }
             OutlinedTextField(input, { input = it.filter(Char::isDigit).take(4) }, modifier = Modifier.fillMaxWidth(), singleLine = true,
-                label = { Text("自定义秒数") },
-                isError = value == null || value !in 1..600, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
-            Text("1～600 秒，建议从 60 秒开始", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                label = { Text(if (returnGrace) "自定义分钟数" else "自定义秒数") },
+                isError = value == null || value !in range, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            Text(if (returnGrace) "1～60 分钟，默认 5 分钟" else "1～600 秒，建议从 60 秒开始", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

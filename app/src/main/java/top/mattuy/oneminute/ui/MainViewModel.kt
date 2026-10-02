@@ -47,6 +47,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         catch (error: Exception) { fail("保存失败，等待时长未更改", error) }
     }
     fun dismissError() { mutableError.value = null }
+    fun setReturnGraceMinutes(minutes: Int) = viewModelScope.launch {
+        try { store.setReturnGraceMinutes(minutes) }
+        catch (error: kotlinx.coroutines.CancellationException) { throw error }
+        catch (error: Exception) { fail("保存失败，返回免等待时长未更改", error) }
+    }
     private fun fail(message: String, error: Exception) {
         Log.e("OneMinute.Settings", message, error); mutableError.value = message
     }

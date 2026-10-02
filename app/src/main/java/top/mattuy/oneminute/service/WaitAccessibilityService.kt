@@ -42,13 +42,13 @@ class WaitAccessibilityService : AccessibilityService() {
     private val windowManager by lazy { getSystemService(WindowManager::class.java) }
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == Intent.ACTION_SCREEN_OFF) reset()
+            if (intent.action == Intent.ACTION_SCREEN_OFF) leaveForeground()
             else handler.postDelayed({ refreshForeground() }, 150)
         }
     }
     private val tick = object : Runnable {
         override fun run() {
-            if (locked()) { reset(); return }
+            if (locked()) { leaveForeground(); return }
             session.tick(SystemClock.elapsedRealtime())
             render()
         }
@@ -72,6 +72,8 @@ class WaitAccessibilityService : AccessibilityService() {
                 try {
                     SettingsStore(this@WaitAccessibilityService).settings.collect {
                         settings = it.copy(packages = it.packages - protected)
+                        session.setReturnGraceMinutes(it.returnGraceMinutes)
+                        session.retainSelectedPackages(it.packages - protected)
                         refreshForeground()
                     }
                 } catch (error: kotlinx.coroutines.CancellationException) { throw error }
@@ -92,7 +94,7 @@ class WaitAccessibilityService : AccessibilityService() {
 
     /** Only inspect window metadata and the root's package name; never traverse page content. */
     private fun refreshForeground() {
-        if (locked()) { reset(); return }
+        if (locked()) { leaveForeground(); return }
         val rules = settings ?: return
         val target = ForegroundResolver.resolve(windows.map { window ->
             val kind = when (window.type) {
@@ -139,7 +141,7 @@ class WaitAccessibilityService : AccessibilityService() {
                     if (session.proceed(gate.id, SystemClock.elapsedRealtime())) render()
                 },
                 onCancel = {
-                    if (performGlobalAction(GLOBAL_ACTION_HOME)) reset()
+                    if (performGlobalAction(GLOBAL_ACTION_HOME)) leaveForeground()
                     else {
                         Log.e(TAG, "System refused GLOBAL_ACTION_HOME while cancelling wait")
                         Toast.makeText(this, "未能返回桌面，请使用系统主页手势", Toast.LENGTH_SHORT).show()
@@ -183,6 +185,7 @@ class WaitAccessibilityService : AccessibilityService() {
         overlay = null; displayedId = null
     }
     private fun reset() { session.clear(); hideOverlay() }
+    private fun leaveForeground() { session.leave(SystemClock.elapsedRealtime()); hideOverlay() }
     override fun onInterrupt() { reset() }
     override fun onUnbind(intent: Intent?): Boolean { cleanup(); return super.onUnbind(intent) }
     override fun onDestroy() { cleanup(); super.onDestroy() }

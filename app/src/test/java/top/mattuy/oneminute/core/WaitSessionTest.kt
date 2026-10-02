@@ -21,13 +21,13 @@ class WaitSessionTest {
         session.foreground("app.a", 60, 70000)
         assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
     }
-    @Test fun `returning from home starts a full new wait`() {
+    @Test fun `returning from home within five minutes keeps granted access`() {
         session.foreground("app.a", 60, 0)
         session.proceed(session.gate!!.id, 60000)
         session.foreground("launcher", null, 65000)
         assertNull(session.gate)
         session.foreground("app.a", 60, 70000)
-        assertEquals(130000L, session.gate!!.deadline)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
     }
     @Test fun `old completion cannot unlock another app or a later session`() {
         session.foreground("app.a", 60, 0)
@@ -37,7 +37,7 @@ class WaitSessionTest {
         session.foreground("app.a", 60, 80000)
         assertFalse(session.proceed(oldId, 200000))
     }
-    @Test fun `lock and service restart clear granted access`() {
+    @Test fun `service restart clears granted access`() {
         session.foreground("app.a", 60, 0)
         session.proceed(session.gate!!.id, 60000)
         session.clear()
@@ -113,7 +113,7 @@ class WaitSessionTest {
     @Test fun `locking while notification shade is open clears the interrupted gate`() {
         session.foreground("app.a", 60, 0)
         session.systemInterruption()
-        session.clear()
+        session.leave(20000)
         assertFalse(session.systemInterrupted)
         assertNull(session.gate)
         session.foreground("app.a", 60, 30000)
@@ -123,5 +123,148 @@ class WaitSessionTest {
         session.foreground("app.a", null, 0)
         session.foreground("app.b", null, 10000)
         assertNull(session.gate)
+    }
+
+    private fun allow(packageName: String, now: Long) {
+        session.foreground(packageName, 60, now)
+        assertTrue(session.proceed(session.gate!!.id, now + 60000))
+    }
+
+    @Test fun `exactly five minutes away is allowed but one millisecond more is not`() {
+        allow("app.a", 0)
+        session.foreground("home", null, 65000)
+        session.foreground("app.a", 60, 365000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+        session.foreground("home", null, 400000)
+        session.foreground("app.a", 60, 700001)
+        assertEquals(WaitSession.Phase.WAITING, session.gate!!.phase)
+        assertEquals(760001L, session.gate!!.deadline)
+    }
+
+    @Test fun `continuous use never expires and grace starts only on departure`() {
+        allow("app.a", 0)
+        session.foreground("app.a", 60, 3600000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+        session.foreground("home", null, 3600000)
+        session.foreground("app.a", 60, 3800000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+    }
+
+    @Test fun `switching between two granted apps retains independent grants`() {
+        allow("app.a", 0)
+        allow("app.b", 70000)
+        session.foreground("app.a", 60, 150000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+        session.foreground("home", null, 160000)
+        session.foreground("app.a", 60, 455000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+        session.foreground("app.b", 60, 455001)
+        assertEquals(WaitSession.Phase.WAITING, session.gate!!.phase)
+    }
+
+    @Test fun `each return starts a new grace period on the next departure`() {
+        allow("app.a", 0)
+        session.leave(70000)
+        session.foreground("app.a", 60, 360000)
+        session.leave(400000)
+        session.foreground("app.a", 60, 690000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+    }
+
+    @Test fun `unfinished or ready but unapproved waits never grant grace`() {
+        session.foreground("app.a", 60, 0)
+        session.leave(10000)
+        session.foreground("app.a", 60, 20000)
+        assertEquals(80000L, session.gate!!.deadline)
+        session.tick(80000)
+        session.leave(90000)
+        session.foreground("app.a", 60, 100000)
+        assertEquals(WaitSession.Phase.WAITING, session.gate!!.phase)
+        assertEquals(160000L, session.gate!!.deadline)
+    }
+
+    @Test fun `repeated lock events do not extend grace and long locks expire it`() {
+        allow("app.a", 0)
+        session.leave(70000)
+        session.leave(200000)
+        session.foreground("app.a", 60, 350000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+        session.leave(400000)
+        session.leave(600000)
+        session.foreground("app.a", 60, 700001)
+        assertEquals(WaitSession.Phase.WAITING, session.gate!!.phase)
+    }
+
+    @Test fun `cancelling another apps wait preserves earlier grants`() {
+        allow("app.a", 0)
+        session.foreground("app.b", 60, 70000)
+        session.leave(80000)
+        session.foreground("app.a", 60, 90000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+        session.foreground("app.b", 60, 100000)
+        assertEquals(WaitSession.Phase.WAITING, session.gate!!.phase)
+    }
+
+    @Test fun `unselecting a background app revokes its saved grant`() {
+        allow("app.a", 0)
+        session.leave(70000)
+        session.retainSelectedPackages(setOf("app.b"))
+        session.retainSelectedPackages(setOf("app.a", "app.b"))
+        session.foreground("app.a", 60, 80000)
+        assertEquals(WaitSession.Phase.WAITING, session.gate!!.phase)
+    }
+
+    @Test fun `unselecting a foreground app revokes its current grant`() {
+        allow("app.a", 0)
+        session.retainSelectedPackages(emptySet())
+        assertNull(session.gate)
+        session.foreground("app.a", 60, 80000)
+        assertEquals(WaitSession.Phase.WAITING, session.gate!!.phase)
+    }
+
+    @Test fun `changing wait duration preserves completed access`() {
+        allow("app.a", 0)
+        session.foreground("app.a", 30, 70000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+        session.leave(80000)
+        session.foreground("app.a", 30, 100000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+    }
+
+    @Test fun `restart clears background grants too`() {
+        allow("app.a", 0)
+        session.leave(70000)
+        session.clear()
+        session.foreground("app.a", 60, 80000)
+        assertEquals(WaitSession.Phase.WAITING, session.gate!!.phase)
+    }
+
+    @Test fun `custom grace duration controls the boundary`() {
+        session.setReturnGraceMinutes(1)
+        allow("app.a", 0)
+        session.leave(70000)
+        session.foreground("app.a", 60, 130000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+        session.leave(140000)
+        session.foreground("app.a", 60, 200001)
+        assertEquals(WaitSession.Phase.WAITING, session.gate!!.phase)
+    }
+
+    @Test fun `changed grace setting uses original departure time`() {
+        allow("app.a", 0)
+        session.leave(70000)
+        session.setReturnGraceMinutes(15)
+        session.foreground("app.a", 60, 600000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+        session.leave(700000)
+        session.setReturnGraceMinutes(1)
+        session.foreground("app.a", 60, 760001)
+        assertEquals(WaitSession.Phase.WAITING, session.gate!!.phase)
+    }
+
+    @Test fun `invalid grace settings are rejected`() {
+        for (minutes in listOf(0, -1, 61)) {
+            assertThrows(IllegalArgumentException::class.java) { session.setReturnGraceMinutes(minutes) }
+        }
     }
 }

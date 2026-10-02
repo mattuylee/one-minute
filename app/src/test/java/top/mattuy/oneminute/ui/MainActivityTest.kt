@@ -3,10 +3,13 @@ package top.mattuy.oneminute.ui
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performScrollTo
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -47,6 +50,27 @@ class MainActivityTest {
         }
         compose.onNodeWithText("从一个应用开始").assertIsDisplayed()
         capture("home-light")
+    }
+
+    @Test fun `return grace accepts custom minutes and retains saved settings`() {
+        compose.waitUntil(15000) {
+            compose.onAllNodesWithText("返回免等待").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("设置").performClick()
+        compose.onNodeWithText("返回免等待时长").assertIsDisplayed()
+        compose.onNodeWithText("自定义分钟数").performScrollTo().performTextReplacement("0")
+        compose.onNodeWithText("保存").assertIsNotEnabled()
+        compose.onNodeWithText("自定义分钟数").performTextReplacement("61")
+        compose.onNodeWithText("保存").assertIsNotEnabled()
+        compose.onNodeWithText("自定义分钟数").performTextReplacement("7")
+        capture("return-grace")
+        compose.onNodeWithText("保存").performClick()
+        compose.waitUntil(10000) {
+            compose.onAllNodesWithText("离开 7 分钟内返回").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("离开 7 分钟内返回").assertIsDisplayed()
+        compose.onNodeWithText("设置").performClick()
+        compose.onNodeWithText("7").assertIsDisplayed()
     }
 
     private fun capture(name: String) {
