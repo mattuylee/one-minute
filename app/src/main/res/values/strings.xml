@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">稍等</string>
+    <string name="service_name">稍等 · 应用打开前等待</string>
+    <string name="service_description">识别当前窗口所属的应用，在选定应用上显示倒计时。不会读取或保存页面文字、输入内容，不会截图，也不会联网。你可以随时在这里关闭服务。</string>
+</resources>
