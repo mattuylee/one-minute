@@ -12,8 +12,12 @@ class WaitSession {
     private var foreground: String? = null
     var gate: Gate? = null
         private set
+    var systemInterrupted = false
+        private set
 
     fun foreground(packageName: String?, seconds: Int?, now: Long) {
+        systemInterrupted = false
+        tick(now)
         val duration = seconds?.takeIf { it > 0 }?.coerceIn(1, 600)
         if (foreground == packageName && gate?.seconds == duration) return
         foreground = packageName
@@ -29,6 +33,7 @@ class WaitSession {
     }
 
     fun proceed(id: Long, now: Long): Boolean {
+        if (systemInterrupted) return false
         tick(now)
         val current = gate ?: return false
         if (current.id != id || current.phase != Phase.READY) return false
@@ -36,10 +41,10 @@ class WaitSession {
         return true
     }
 
-    /** A system dialog must not revoke a completed session, but interrupts unfinished waiting. */
+    /** System UI hides the gate without changing its deadline or revoking granted access. */
     fun systemInterruption() {
-        if (gate?.phase != Phase.ALLOWED) clear()
+        systemInterrupted = true
     }
 
-    fun clear() { foreground = null; gate = null }
+    fun clear() { foreground = null; gate = null; systemInterrupted = false }
 }

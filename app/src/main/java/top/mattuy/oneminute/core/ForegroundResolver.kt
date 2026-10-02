@@ -11,9 +11,13 @@ object ForegroundResolver {
     }
     fun resolve(windows: List<Window>): Target {
         val focused = windows.firstOrNull { it.focused && it.kind != Kind.OVERLAY }
-        if (focused?.kind == Kind.SYSTEM) return Target.SystemInterruption
+        if (focused?.kind == Kind.SYSTEM || focused?.packageName == "com.android.systemui") {
+            return Target.SystemInterruption
+        }
         val app = windows.firstOrNull { it.kind == Kind.APPLICATION && it.focused }
             ?: windows.firstOrNull { it.kind == Kind.APPLICATION && it.active }
+        // Some system surfaces are reported as application windows instead of TYPE_SYSTEM.
+        if (app?.packageName == "com.android.systemui") return Target.SystemInterruption
         return app?.packageName?.takeIf { it.isNotBlank() }?.let(Target::App) ?: Target.Unknown
     }
 }

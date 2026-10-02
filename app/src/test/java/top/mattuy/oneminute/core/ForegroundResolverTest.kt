@@ -23,6 +23,13 @@ class ForegroundResolverTest {
         assertEquals(Target.App("browser"), ForegroundResolver.resolve(listOf(
             Window(APPLICATION, false, true, "video"), Window(APPLICATION, true, true, "browser"))))
     }
+    @Test fun `system UI reported as an application is still a temporary interruption`() {
+        assertEquals(Target.SystemInterruption, ForegroundResolver.resolve(listOf(
+            Window(APPLICATION, true, true, "com.android.systemui"),
+            Window(APPLICATION, false, false, "video"))))
+        assertEquals(Target.SystemInterruption, ForegroundResolver.resolve(listOf(
+            Window(APPLICATION, false, true, "com.android.systemui"))))
+    }
     @Test fun `missing root never invents a foreground package`() {
         assertEquals(Target.Unknown, ForegroundResolver.resolve(listOf(Window(APPLICATION, true, true, null))))
     }

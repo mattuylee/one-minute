@@ -39,7 +39,6 @@ class WaitAccessibilityService : AccessibilityService() {
     private var overlay: WaitOverlayView? = null
     private var displayedId: Long? = null
     private var receiverRegistered = false
-    private var systemInterrupted = false
     private val windowManager by lazy { getSystemService(WindowManager::class.java) }
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -109,14 +108,12 @@ class WaitAccessibilityService : AccessibilityService() {
         val activePackage = when (target) {
             is ForegroundResolver.Target.App -> target.packageName
             ForegroundResolver.Target.SystemInterruption -> {
-                systemInterrupted = true
                 session.systemInterruption()
                 hideOverlay()
                 return
             }
             ForegroundResolver.Target.Unknown -> return
         }
-        systemInterrupted = false
         session.foreground(activePackage, rules.seconds.takeIf { activePackage in rules.packages }, SystemClock.elapsedRealtime())
         render()
     }
@@ -124,7 +121,7 @@ class WaitAccessibilityService : AccessibilityService() {
     private fun render() {
         handler.removeCallbacks(tick)
         val gate = session.gate
-        if (systemInterrupted || gate == null || gate.phase == WaitSession.Phase.ALLOWED) {
+        if (session.systemInterrupted || gate == null || gate.phase == WaitSession.Phase.ALLOWED) {
             hideOverlay(); return
         }
         if (displayedId != gate.id) {
@@ -185,7 +182,7 @@ class WaitAccessibilityService : AccessibilityService() {
         }
         overlay = null; displayedId = null
     }
-    private fun reset() { session.clear(); systemInterrupted = false; hideOverlay() }
+    private fun reset() { session.clear(); hideOverlay() }
     override fun onInterrupt() { reset() }
     override fun onUnbind(intent: Intent?): Boolean { cleanup(); return super.onUnbind(intent) }
     override fun onDestroy() { cleanup(); super.onDestroy() }

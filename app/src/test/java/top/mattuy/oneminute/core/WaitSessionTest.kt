@@ -63,14 +63,61 @@ class WaitSessionTest {
         session.tick(61000)
         assertEquals(WaitSession.Phase.READY, session.gate!!.phase)
     }
-    @Test fun `system interruption cancels waiting but preserves completed session`() {
+    @Test fun `notification shade preserves deadline and returning shows remaining time`() {
         session.foreground("app.a", 60, 0)
+        val original = session.gate!!
+        session.tick(20000)
         session.systemInterruption()
-        assertNull(session.gate)
+        session.systemInterruption()
+        assertTrue(session.systemInterrupted)
+        assertEquals(original, session.gate)
+        session.foreground("app.a", 60, 30000)
+        assertFalse(session.systemInterrupted)
+        assertEquals(original.id, session.gate!!.id)
+        assertEquals(30, session.gate!!.remainingSeconds(30000))
+        assertFalse(session.proceed(original.id, 59999))
+        assertTrue(session.proceed(original.id, 60000))
+    }
+    @Test fun `time elapsed in notification shade is retained but cannot approve while obscured`() {
+        session.foreground("app.a", 60, 0)
+        val id = session.gate!!.id
+        session.systemInterruption()
+        assertFalse(session.proceed(id, 70000))
         session.foreground("app.a", 60, 70000)
-        session.proceed(session.gate!!.id, 130000)
+        assertEquals(id, session.gate!!.id)
+        assertEquals(WaitSession.Phase.READY, session.gate!!.phase)
+        assertTrue(session.proceed(id, 70000))
+    }
+    @Test fun `system interruption preserves ready and allowed sessions`() {
+        session.foreground("app.a", 60, 0)
+        session.tick(60000)
+        session.systemInterruption()
+        assertEquals(WaitSession.Phase.READY, session.gate!!.phase)
+        session.foreground("app.a", 60, 70000)
+        assertTrue(session.proceed(session.gate!!.id, 70000))
         session.systemInterruption()
         assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+        session.foreground("app.a", 60, 80000)
+        assertEquals(WaitSession.Phase.ALLOWED, session.gate!!.phase)
+    }
+    @Test fun `opening another app from a notification still starts its own wait`() {
+        session.foreground("app.a", 60, 0)
+        val oldId = session.gate!!.id
+        session.systemInterruption()
+        session.foreground("app.b", 60, 20000)
+        assertFalse(session.systemInterrupted)
+        assertEquals("app.b", session.gate!!.packageName)
+        assertEquals(80000L, session.gate!!.deadline)
+        assertFalse(session.proceed(oldId, 90000))
+    }
+    @Test fun `locking while notification shade is open clears the interrupted gate`() {
+        session.foreground("app.a", 60, 0)
+        session.systemInterruption()
+        session.clear()
+        assertFalse(session.systemInterrupted)
+        assertNull(session.gate)
+        session.foreground("app.a", 60, 30000)
+        assertEquals(90000L, session.gate!!.deadline)
     }
     @Test fun `no rules never produces an overlay`() {
         session.foreground("app.a", null, 0)
