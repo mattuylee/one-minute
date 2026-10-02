@@ -2,6 +2,7 @@ package top.mattuy.oneminute.ui
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.content.ClipboardManager
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
@@ -71,6 +72,22 @@ class MainActivityTest {
         compose.onNodeWithText("离开 7 分钟内返回").assertIsDisplayed()
         compose.onNodeWithText("设置").performClick()
         compose.onNodeWithText("7").assertIsDisplayed()
+    }
+
+    @Test fun `diagnostics can be opened and copied without accessibility access`() {
+        compose.waitUntil(15000) {
+            compose.onAllNodesWithText("运行诊断").fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("运行诊断").performScrollTo().performClick()
+        compose.waitUntil(15000) {
+            compose.onAllNodesWithText("无障碍开关：关闭", substring = true).fetchSemanticsNodes().isNotEmpty()
+        }
+        compose.onNodeWithText("复制诊断").performClick()
+        compose.onNodeWithText("已复制诊断").assertIsDisplayed()
+        compose.runOnIdle {
+            val clipboard = compose.activity.getSystemService(ClipboardManager::class.java)
+            org.junit.Assert.assertTrue(clipboard.primaryClip!!.getItemAt(0).text.contains("本进程服务连接"))
+        }
     }
 
     private fun capture(name: String) {

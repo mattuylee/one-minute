@@ -45,6 +45,7 @@ import top.mattuy.oneminute.data.InstalledApp
 import top.mattuy.oneminute.service.ServiceStatus
 import top.mattuy.oneminute.ui.MainViewModel
 import top.mattuy.oneminute.ui.WaitOverlayView
+import top.mattuy.oneminute.ui.DiagnosticsScreen
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -59,21 +60,31 @@ class MainActivity : ComponentActivity() {
         val apps by model.apps.collectAsStateWithLifecycle()
         val error by model.error.collectAsStateWithLifecycle()
         val connected by ServiceStatus.connected.collectAsStateWithLifecycle()
+        val enabled by ServiceStatus.enabled.collectAsStateWithLifecycle()
         val serviceError by ServiceStatus.error.collectAsStateWithLifecycle()
         var picking by rememberSaveable { mutableStateOf(false) }
         var editingDuration by rememberSaveable { mutableStateOf(false) }
         var editingReturnGrace by rememberSaveable { mutableStateOf(false) }
         var showingHelp by rememberSaveable { mutableStateOf(false) }
         var showingPreview by rememberSaveable { mutableStateOf(false) }
+        var showingDiagnostics by rememberSaveable { mutableStateOf(false) }
         val snack = remember { SnackbarHostState() }
-        LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { model.refreshApps() }
+        LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+            model.refreshApps()
+            ServiceStatus.refreshPermission(this@MainActivity)
+        }
         LaunchedEffect(error) {
             error?.let { snack.showSnackbar(it); model.dismissError() }
         }
-        BackHandler(picking || showingPreview || editingDuration || editingReturnGrace) {
+        BackHandler(picking || showingPreview || editingDuration || editingReturnGrace || showingDiagnostics) {
             picking = false; showingPreview = false; editingDuration = false; editingReturnGrace = false
+            showingDiagnostics = false
         }
         val config = settings
+        if (showingDiagnostics) {
+            DiagnosticsScreen { showingDiagnostics = false }
+            return
+        }
         if (showingPreview && config != null) {
             Preview(config.seconds) { showingPreview = false }
             return
@@ -166,12 +177,24 @@ class MainActivity : ComponentActivity() {
                             Surface(shape = RoundedCornerShape(22.dp), color = MaterialTheme.colorScheme.surface) {
                                 Column(Modifier.fillMaxWidth().padding(18.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(Modifier.size(8.dp).background(if (connected && serviceError == null) Color(0xFF67917B) else Color(0xFFD5A452), CircleShape))
-                                        Text(if (connected && serviceError == null) "等待保护已开启" else "开启等待保护", Modifier.weight(1f).padding(start = 10.dp), fontWeight = FontWeight.Medium)
-                                        TextButton(onClick = { showingHelp = true }) { Text(if (connected) "管理" else "去开启") }
+                                        Box(Modifier.size(8.dp).background(if (connected && enabled != false && serviceError == null) Color(0xFF67917B) else Color(0xFFD5A452), CircleShape))
+                                        Text(when {
+                                            serviceError != null -> "等待服务异常"
+                                            enabled == false -> "开启等待保护"
+                                            connected -> "等待保护已开启"
+                                            enabled == true -> "服务未连接"
+                                            else -> "无法确认授权状态"
+                                        }, Modifier.weight(1f).padding(start = 10.dp), fontWeight = FontWeight.Medium)
+                                        TextButton(onClick = { showingHelp = true }) { Text(if (enabled == true) "管理" else "去开启") }
                                     }
-                                    Text(serviceError ?: if (connected) "打开选定应用时，先留一点时间想一想。" else "需要你在系统设置中开启「稍等」无障碍服务。",
+                                    Text(serviceError ?: when {
+                                        enabled == false -> "系统无障碍开关已关闭，需要你手动开启。"
+                                        connected -> "打开选定应用时，先留一点时间想一想。"
+                                        enabled == true -> "开关已开启，服务尚未连接。持续如此可查看运行诊断。"
+                                        else -> "无法读取系统开关，请到无障碍设置核对。"
+                                    },
                                         fontSize = 13.sp, lineHeight = 20.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    TextButton(onClick = { showingDiagnostics = true }) { Text("运行诊断") }
                                 }
                             }
                         }

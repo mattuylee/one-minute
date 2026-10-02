@@ -56,6 +56,9 @@ class WaitAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        ServiceDiagnostics.install(this)
+        ServiceDiagnostics.record(this, "服务连接")
+        ServiceStatus.refreshPermission(this)
         scope?.cancel()
         reset()
         protected = AppCatalog.protectedPackages(this)
@@ -79,6 +82,7 @@ class WaitAccessibilityService : AccessibilityService() {
                 } catch (error: kotlinx.coroutines.CancellationException) { throw error }
                 catch (error: Exception) {
                     Log.e(TAG, "Failed to load waiting rules; interception stopped", error)
+                    ServiceDiagnostics.record(this@WaitAccessibilityService, "规则加载或初次窗口处理失败：${error.javaClass.simpleName}")
                     settings = null
                     reset()
                     ServiceStatus.error("规则读取失败，请重新开启无障碍服务")
@@ -164,6 +168,7 @@ class WaitAccessibilityService : AccessibilityService() {
                 ServiceStatus.error(null)
             } catch (error: RuntimeException) {
                 Log.e(TAG, "Failed to attach waiting overlay", error)
+                ServiceDiagnostics.record(this, "遮罩添加失败：${error.javaClass.simpleName}")
                 ServiceStatus.error("等待页显示失败，请重新开启无障碍服务")
                 performGlobalAction(GLOBAL_ACTION_HOME)
                 session.clear()
@@ -186,9 +191,18 @@ class WaitAccessibilityService : AccessibilityService() {
     }
     private fun reset() { session.clear(); hideOverlay() }
     private fun leaveForeground() { session.leave(SystemClock.elapsedRealtime()); hideOverlay() }
-    override fun onInterrupt() { reset() }
-    override fun onUnbind(intent: Intent?): Boolean { cleanup(); return super.onUnbind(intent) }
-    override fun onDestroy() { cleanup(); super.onDestroy() }
+    // This callback interrupts spoken/haptic feedback, not the accessibility connection.
+    // We provide neither; preserve the visual gate and grants until a real window change.
+    override fun onInterrupt() { ServiceDiagnostics.record(this, "收到反馈中断回调（不是断开连接）") }
+    override fun onUnbind(intent: Intent?): Boolean {
+        ServiceDiagnostics.record(this, "服务解除绑定")
+        cleanup(); ServiceStatus.refreshPermission(this)
+        return super.onUnbind(intent)
+    }
+    override fun onDestroy() {
+        ServiceDiagnostics.record(this, "服务销毁")
+        cleanup(); super.onDestroy()
+    }
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
         hideOverlay(); render()
