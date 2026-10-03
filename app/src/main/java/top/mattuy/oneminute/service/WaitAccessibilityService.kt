@@ -33,6 +33,7 @@ import top.mattuy.oneminute.ui.WaitOverlayView
 class WaitAccessibilityService : AccessibilityService() {
     private val session = WaitSession()
     private val handler = Handler(Looper.getMainLooper())
+    private val refreshScheduler = ForegroundRefreshScheduler(handler) { refreshForeground() }
     private var scope: CoroutineScope? = null
     private var settings: WaitingSettings? = null
     private var protected = emptySet<String>()
@@ -48,6 +49,7 @@ class WaitAccessibilityService : AccessibilityService() {
     }
     private val tick = object : Runnable {
         override fun run() {
+            ServiceWorkStats.ticks++
             if (locked()) { leaveForeground(); return }
             session.tick(SystemClock.elapsedRealtime())
             render()
@@ -77,6 +79,11 @@ class WaitAccessibilityService : AccessibilityService() {
                         settings = it.copy(packages = it.packages - protected)
                         session.setReturnGraceMinutes(it.returnGraceMinutes)
                         session.retainSelectedPackages(it.packages - protected)
+                        serviceInfo?.let { info ->
+                            info.eventTypes = if (settings!!.packages.isEmpty()) 0 else
+                                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOWS_CHANGED
+                            setServiceInfo(info)
+                        }
                         refreshForeground()
                     }
                 } catch (error: kotlinx.coroutines.CancellationException) { throw error }
@@ -92,15 +99,20 @@ class WaitAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (event == null || settings == null) return
-        refreshForeground()
+        if (event == null) return
+        ServiceWorkStats.events++
+        if (settings?.packages.isNullOrEmpty()) return
+        if (ForegroundRefreshScheduler.relevant(event.eventType, event.windowChanges)) refreshScheduler.request()
     }
 
     /** Only inspect window metadata and the root's package name; never traverse page content. */
     private fun refreshForeground() {
         if (locked()) { leaveForeground(); return }
         val rules = settings ?: return
-        val target = ForegroundResolver.resolve(windows.map { window ->
+        if (rules.packages.isEmpty()) { reset(); return }
+        ServiceWorkStats.scans++
+        val currentWindows = windows
+        val target = try { ForegroundResolver.resolve(currentWindows.map { window ->
             val kind = when (window.type) {
                 AccessibilityWindowInfo.TYPE_APPLICATION -> ForegroundResolver.Kind.APPLICATION
                 AccessibilityWindowInfo.TYPE_SYSTEM -> ForegroundResolver.Kind.SYSTEM
@@ -108,9 +120,16 @@ class WaitAccessibilityService : AccessibilityService() {
                 AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY -> ForegroundResolver.Kind.OVERLAY
                 else -> ForegroundResolver.Kind.OTHER
             }
-            ForegroundResolver.Window(kind, window.isFocused, window.isActive,
-                if (kind == ForegroundResolver.Kind.APPLICATION) window.root?.packageName?.toString() else null)
-        })
+            ForegroundResolver.Window(kind, window.isFocused, window.isActive, null)
+        }) { index ->
+            ServiceWorkStats.roots++
+            val root = currentWindows[index].root
+            try { root?.packageName?.toString() }
+            finally { @Suppress("DEPRECATION") root?.recycle() }
+        } } finally {
+            @Suppress("DEPRECATION")
+            currentWindows.forEach { it.recycle() }
+        }
         val activePackage = when (target) {
             is ForegroundResolver.Target.App -> target.packageName
             ForegroundResolver.Target.SystemInterruption -> {
@@ -176,7 +195,7 @@ class WaitAccessibilityService : AccessibilityService() {
             }
         }
         overlay?.update(gate.remainingSeconds(SystemClock.elapsedRealtime()), gate.seconds)
-        if (gate.phase == WaitSession.Phase.WAITING) handler.postDelayed(tick, 200)
+        if (gate.phase == WaitSession.Phase.WAITING) handler.postDelayed(tick, gate.nextTickDelay(SystemClock.elapsedRealtime()))
     }
 
     private fun locked(): Boolean = !getSystemService(PowerManager::class.java).isInteractive ||
@@ -189,8 +208,8 @@ class WaitAccessibilityService : AccessibilityService() {
         }
         overlay = null; displayedId = null
     }
-    private fun reset() { session.clear(); hideOverlay() }
-    private fun leaveForeground() { session.leave(SystemClock.elapsedRealtime()); hideOverlay() }
+    private fun reset() { refreshScheduler.cancel(); session.clear(); hideOverlay() }
+    private fun leaveForeground() { refreshScheduler.cancel(); session.leave(SystemClock.elapsedRealtime()); hideOverlay() }
     // This callback interrupts spoken/haptic feedback, not the accessibility connection.
     // We provide neither; preserve the visual gate and grants until a real window change.
     override fun onInterrupt() { ServiceDiagnostics.record(this, "收到反馈中断回调（不是断开连接）") }

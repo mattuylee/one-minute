@@ -63,6 +63,7 @@ object ServiceDiagnostics {
         appendLine("服务错误：${ServiceStatus.error.value ?: "无"}")
         appendLine("系统电池优化豁免：${context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)}")
         appendLine("（此项不能代表厂商自启动或后台管理设置。）")
+        appendLine(ServiceWorkStats.summary())
         appendLine("\n最近的进程退出记录（系统提供）：")
         val exits = context.getSystemService(ActivityManager::class.java)
             .getHistoricalProcessExitReasons(context.packageName, 0, 5)

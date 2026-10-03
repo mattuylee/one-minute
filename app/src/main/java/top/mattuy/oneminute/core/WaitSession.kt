@@ -6,6 +6,7 @@ class WaitSession {
     data class Gate(val id: Long, val packageName: String, val seconds: Int, val deadline: Long,
                     val phase: Phase = Phase.WAITING) {
         fun remainingSeconds(now: Long): Int = ((deadline - now).coerceAtLeast(0) + 999).div(1000).toInt()
+        fun nextTickDelay(now: Long): Long = ((deadline - now).coerceAtLeast(1) - 1) % 1000 + 1
     }
 
     private var nextId = 0L

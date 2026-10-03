@@ -7,6 +7,21 @@ import top.mattuy.oneminute.core.ForegroundResolver.Window
 import top.mattuy.oneminute.core.ForegroundResolver.Target
 
 class ForegroundResolverTest {
+    @Test fun `package lookup only reads the chosen app and never background windows`() {
+        val reads = mutableListOf<Int>()
+        val target = ForegroundResolver.resolve(listOf(
+            Window(APPLICATION, false, false, null),
+            Window(APPLICATION, true, true, null),
+            Window(APPLICATION, false, true, null))) { index -> reads += index; "focused-app" }
+        assertEquals(Target.App("focused-app"), target)
+        assertEquals(listOf(1), reads)
+    }
+    @Test fun `system shade and absent apps require no package lookup`() {
+        val lookup: (Int) -> String? = { error("Unexpected root lookup") }
+        assertEquals(Target.SystemInterruption, ForegroundResolver.resolve(listOf(
+            Window(SYSTEM, true, true, null), Window(APPLICATION, false, true, null)), lookup))
+        assertEquals(Target.Unknown, ForegroundResolver.resolve(emptyList(), lookup))
+    }
     @Test fun `our own overlay is not an application switch`() {
         assertEquals(Target.App("video"), ForegroundResolver.resolve(listOf(
             Window(OVERLAY, true, true, "self"), Window(APPLICATION, false, true, "video"))))

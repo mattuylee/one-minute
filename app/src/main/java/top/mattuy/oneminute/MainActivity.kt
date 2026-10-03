@@ -310,7 +310,7 @@ private fun Preview(seconds: Int, onClose: () -> Unit) {
     LaunchedEffect(deadline) {
         while (remaining > 0) {
             remaining = ((deadline - SystemClock.elapsedRealtime()).coerceAtLeast(0) + 999).div(1000).toInt()
-            delay(200)
+            if (remaining > 0) delay((deadline - SystemClock.elapsedRealtime()).coerceIn(1L, 1000L))
         }
     }
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding()) {

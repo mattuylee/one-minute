@@ -9,15 +9,17 @@ object ForegroundResolver {
         data object SystemInterruption : Target
         data object Unknown : Target
     }
-    fun resolve(windows: List<Window>): Target {
+    fun resolve(windows: List<Window>, packageAt: (Int) -> String? = { windows[it].packageName }): Target {
         val focused = windows.firstOrNull { it.focused && it.kind != Kind.OVERLAY }
-        if (focused?.kind == Kind.SYSTEM || focused?.packageName == "com.android.systemui") {
+        if (focused?.kind == Kind.SYSTEM) {
             return Target.SystemInterruption
         }
-        val app = windows.firstOrNull { it.kind == Kind.APPLICATION && it.focused }
-            ?: windows.firstOrNull { it.kind == Kind.APPLICATION && it.active }
+        val focusedApp = windows.indexOfFirst { it.kind == Kind.APPLICATION && it.focused }
+        val index = if (focusedApp >= 0) focusedApp else windows.indexOfFirst { it.kind == Kind.APPLICATION && it.active }
+        if (index < 0) return Target.Unknown
+        val packageName = packageAt(index)
         // Some system surfaces are reported as application windows instead of TYPE_SYSTEM.
-        if (app?.packageName == "com.android.systemui") return Target.SystemInterruption
-        return app?.packageName?.takeIf { it.isNotBlank() }?.let(Target::App) ?: Target.Unknown
+        if (packageName == "com.android.systemui") return Target.SystemInterruption
+        return packageName?.takeIf { it.isNotBlank() }?.let(Target::App) ?: Target.Unknown
     }
 }

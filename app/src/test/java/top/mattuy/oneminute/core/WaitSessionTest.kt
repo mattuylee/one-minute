@@ -4,6 +4,19 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class WaitSessionTest {
+    @Test fun `one minute countdown needs sixty scheduled ticks and aligns after a delayed callback`() {
+        val gate = WaitSession.Gate(1, "app", 60, 60123)
+        var now = 123L
+        var ticks = 0
+        while (now < gate.deadline) {
+            now += gate.nextTickDelay(now)
+            ticks++
+        }
+        assertEquals(60, ticks)
+        assertEquals(60123L, now)
+        assertEquals(650L, gate.nextTickDelay(1473))
+        assertEquals(1L, gate.nextTickDelay(60122))
+    }
     private val session = WaitSession()
     @Test fun `cannot proceed early even if UI button is invoked`() {
         session.foreground("app.a", 60, 1000)
