@@ -4,6 +4,8 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+val releaseStoreFile = providers.environmentVariable("ANDROID_SIGNING_STORE_FILE").orNull
+
 android {
     namespace = "top.mattuy.oneminute"
     compileSdk = 36
@@ -15,10 +17,21 @@ android {
         versionName = "0.1.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    signingConfigs {
+        if (releaseStoreFile != null) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFile)
+                storePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").get()
+                keyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").get()
+                keyPassword = providers.environmentVariable("ANDROID_KEY_PASSWORD").get()
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (releaseStoreFile != null) signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
@@ -28,6 +41,16 @@ android {
     buildFeatures { compose = true }
     testOptions { unitTests.isIncludeAndroidResources = true }
     lint { abortOnError = true }
+}
+
+tasks.register("printVersionName") {
+    description = "Prints the Android version name for release automation."
+    doLast { println(android.defaultConfig.versionName) }
+}
+
+tasks.register("printVersionCode") {
+    description = "Prints the Android version code for release automation."
+    doLast { println(android.defaultConfig.versionCode) }
 }
 
 kotlin { compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) } }

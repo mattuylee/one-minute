@@ -1,0 +1,128 @@
+name: Android Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - app/src/main/**
+      - app/build.gradle.kts
+      - build.gradle.kts
+      - settings.gradle.kts
+      - gradle.properties
+      - gradle/wrapper/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish signed APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout source and tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Resolve release version
+        id: version
+        shell: bash
+        run: |
+          version_name="$(./gradlew -q :app:printVersionName)"
+          version_code="$(./gradlew -q :app:printVersionCode)"
+          if [[ ! "$version_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Unsupported versionName: $version_name" >&2
+            exit 1
+          fi
+          tag="v${version_name}"
+          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+            tagged_sha="$(git rev-list -n 1 "$tag")"
+            if [[ "$tagged_sha" != "$GITHUB_SHA" ]]; then
+              echo "$tag already points to $tagged_sha; bump versionName/versionCode before publishing $GITHUB_SHA" >&2
+              exit 1
+            fi
+          fi
+          echo "name=$version_name" >> "$GITHUB_OUTPUT"
+          echo "code=$version_code" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Restore signing key
+        shell: bash
+        env:
+          ANDROID_SIGNING_KEY_BASE64: ${{ secrets.ANDROID_SIGNING_KEY_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          for variable in ANDROID_SIGNING_KEY_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [[ -z "${!variable}" ]]; then
+              echo "Required repository secret is missing: $variable" >&2
+              exit 1
+            fi
+          done
+          signing_store="$RUNNER_TEMP/one-minute-release.keystore"
+          printf '%s' "$ANDROID_SIGNING_KEY_BASE64" | base64 --decode > "$signing_store"
+          chmod 600 "$signing_store"
+          echo "ANDROID_SIGNING_STORE_FILE=$signing_store" >> "$GITHUB_ENV"
+
+      - name: Test, lint and build signed release APK
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleRelease --console=plain
+
+      - name: Verify and stage release assets
+        id: assets
+        shell: bash
+        run: |
+          source_apk="app/build/outputs/apk/release/app-release.apk"
+          if [[ ! -f "$source_apk" ]]; then
+            echo "Signed release APK was not produced" >&2
+            exit 1
+          fi
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$source_apk"
+          asset_dir="$RUNNER_TEMP/release-assets"
+          mkdir -p "$asset_dir"
+          apk="$asset_dir/one-minute-${{ steps.version.outputs.tag }}.apk"
+          cp "$source_apk" "$apk"
+          (cd "$asset_dir" && sha256sum "$(basename "$apk")" > "$(basename "$apk").sha256")
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+          echo "checksum=$apk.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.name }}
+          APK: ${{ steps.assets.outputs.apk }}
+          CHECKSUM: ${{ steps.assets.outputs.checksum }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" "$CHECKSUM" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "$APK" "$CHECKSUM" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "稍等 $VERSION" \
+              --generate-notes
+          fi
