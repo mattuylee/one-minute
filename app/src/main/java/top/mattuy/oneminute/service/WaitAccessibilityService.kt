@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.PixelFormat
+import android.graphics.Rect
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -39,6 +41,12 @@ class WaitAccessibilityService : AccessibilityService() {
     private var protected = emptySet<String>()
     private var overlay: WaitOverlayView? = null
     private var displayedId: Long? = null
+    private var foregroundWindow: WindowBackdrop.Target? = null
+    private var backdropFailed = false
+    private val backdrop = WindowBackdrop { windowId ->
+        if (Build.VERSION.SDK_INT >= 34) SurfaceBackdropLayer(this, windowId)
+        else error("Window-attached backgrounds require Android 14")
+    }
     private var receiverRegistered = false
     private val windowManager by lazy { getSystemService(WindowManager::class.java) }
     private val screenReceiver = object : BroadcastReceiver() {
@@ -63,6 +71,7 @@ class WaitAccessibilityService : AccessibilityService() {
         ServiceStatus.refreshPermission(this)
         scope?.cancel()
         reset()
+        backdropFailed = false
         protected = AppCatalog.protectedPackages(this)
         if (!receiverRegistered) {
             ContextCompat.registerReceiver(this, screenReceiver, IntentFilter().apply {
@@ -102,7 +111,10 @@ class WaitAccessibilityService : AccessibilityService() {
         if (event == null) return
         ServiceWorkStats.events++
         if (settings?.packages.isNullOrEmpty()) return
-        if (ForegroundRefreshScheduler.relevant(event.eventType, event.windowChanges)) refreshScheduler.request()
+        val waitingWindowResized = overlay != null && event.windowId == foregroundWindow?.windowId &&
+            event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED &&
+            event.windowChanges and AccessibilityEvent.WINDOWS_CHANGE_BOUNDS != 0
+        if (waitingWindowResized || ForegroundRefreshScheduler.relevant(event.eventType, event.windowChanges)) refreshScheduler.request()
     }
 
     /** Only inspect window metadata and the root's package name; never traverse page content. */
@@ -112,6 +124,7 @@ class WaitAccessibilityService : AccessibilityService() {
         if (rules.packages.isEmpty()) { reset(); return }
         ServiceWorkStats.scans++
         val currentWindows = windows
+        foregroundWindow = null
         val target = try { ForegroundResolver.resolve(currentWindows.map { window ->
             val kind = when (window.type) {
                 AccessibilityWindowInfo.TYPE_APPLICATION -> ForegroundResolver.Kind.APPLICATION
@@ -122,8 +135,11 @@ class WaitAccessibilityService : AccessibilityService() {
             }
             ForegroundResolver.Window(kind, window.isFocused, window.isActive, null)
         }) { index ->
+            val window = currentWindows[index]
+            val bounds = Rect().also { window.getBoundsInScreen(it) }
+            foregroundWindow = WindowBackdrop.Target(window.id, bounds.width(), bounds.height())
             ServiceWorkStats.roots++
-            val root = currentWindows[index].root
+            val root = window.root
             try { root?.packageName?.toString() }
             finally { @Suppress("DEPRECATION") root?.recycle() }
         } } finally {
@@ -137,7 +153,11 @@ class WaitAccessibilityService : AccessibilityService() {
                 hideOverlay()
                 return
             }
-            ForegroundResolver.Target.Unknown -> return
+            ForegroundResolver.Target.Unknown -> {
+                foregroundWindow = null
+                backdrop.hide()
+                return
+            }
         }
         session.foreground(activePackage, rules.seconds.takeIf { activePackage in rules.packages }, SystemClock.elapsedRealtime())
         render()
@@ -195,7 +215,23 @@ class WaitAccessibilityService : AccessibilityService() {
             }
         }
         overlay?.update(gate.remainingSeconds(SystemClock.elapsedRealtime()), gate.seconds)
+        updateBackdrop()
         if (gate.phase == WaitSession.Phase.WAITING) handler.postDelayed(tick, gate.nextTickDelay(SystemClock.elapsedRealtime()))
+    }
+
+    private fun updateBackdrop() {
+        if (Build.VERSION.SDK_INT < 34 || backdropFailed) return
+        val target = foregroundWindow ?: return
+        val view = overlay ?: return
+        try {
+            backdrop.show(target, view.backgroundColor)
+        } catch (error: RuntimeException) {
+            Log.e(TAG, "Failed to attach system-bar backdrop; waiting overlay remains active", error)
+            backdropFailed = true
+            backdrop.close()
+            ServiceDiagnostics.record(this, "状态栏背景失败：${error.javaClass.simpleName}")
+            ServiceStatus.error("状态栏背景显示失败，等待功能仍然有效")
+        }
     }
 
     private fun locked(): Boolean = !getSystemService(PowerManager::class.java).isInteractive ||
@@ -203,12 +239,16 @@ class WaitAccessibilityService : AccessibilityService() {
 
     private fun hideOverlay() {
         handler.removeCallbacks(tick)
+        backdrop.hide()
         overlay?.let { view ->
             if (view.isAttachedToWindow) windowManager.removeViewImmediate(view)
         }
         overlay = null; displayedId = null
     }
-    private fun reset() { refreshScheduler.cancel(); session.clear(); hideOverlay() }
+    private fun reset() {
+        refreshScheduler.cancel(); session.clear(); hideOverlay()
+        backdrop.close(); foregroundWindow = null
+    }
     private fun leaveForeground() { refreshScheduler.cancel(); session.leave(SystemClock.elapsedRealtime()); hideOverlay() }
     // This callback interrupts spoken/haptic feedback, not the accessibility connection.
     // We provide neither; preserve the visual gate and grants until a real window change.
@@ -224,7 +264,7 @@ class WaitAccessibilityService : AccessibilityService() {
     }
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
-        hideOverlay(); render()
+        hideOverlay(); refreshForeground()
     }
     private fun cleanup() {
         scope?.cancel(); scope = null

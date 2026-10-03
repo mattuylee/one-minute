@@ -27,6 +27,7 @@ class WaitOverlayView(
     onCancel: () -> Unit,
 ) : FrameLayout(context) {
     private val dark = resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES
+    val backgroundColor: Int = Color.parseColor(if (dark) "#1D1B22" else "#F7F6FB")
     private val ink = Color.parseColor(if (dark) "#F4F1FA" else "#302A40")
     private val muted = Color.parseColor(if (dark) "#B8B0C5" else "#7C748B")
     private val accent = Color.parseColor(if (dark) "#BBAAF3" else "#7563C7")
@@ -40,7 +41,9 @@ class WaitOverlayView(
     private var lastTotal = -1
 
     init {
-        setBackgroundColor(Color.parseColor(if (dark) "#1D1B22" else "#F7F6FB"))
+        // Both this view and the separate system-bar backdrop use the same explicit palette.
+        isForceDarkAllowed = false
+        setBackgroundColor(backgroundColor)
         isClickable = true
         val scroll = ScrollView(context).apply { isFillViewport = true; clipToPadding = false }
         addView(scroll, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
