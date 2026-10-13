@@ -5,5 +5,7 @@
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:windowBackground">#F7F6FB</item>
         <item name="android:colorAccent">#7563C7</item>
+        <!-- Compose and the waiting overlay provide their own light/dark palettes. -->
+        <item name="android:forceDarkAllowed">false</item>
     </style>
 </resources>
